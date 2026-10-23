@@ -157,7 +157,6 @@ import {
 } from "@tabler/icons-vue";
 import { saveSettings, type CustomProvider, type CustomProviderModel } from "@/stores/settings";
 import { languageProviders } from "@toonflow/providers";
-import { isTfRouterProvider } from "@/lib/tf";
 import { thinkingLevels, type ThinkingLevel, type ReasoningEfforts } from "@toonflow/server/modelReasoning";
 
 const props = defineProps<{ provider?: CustomProvider }>();
@@ -261,14 +260,6 @@ async function fetchModels() {
     );
     if (controller.signal.aborted) return;
     if (data.code !== 200 || !Array.isArray(data.data)) throw new Error(data.message || "获取模型列表失败");
-    if (isTfRouterProvider(form)) {
-      if (!data.data.length) throw new Error("未获取到可用模型，请检查 API Key 后重试");
-      models.value = data.data.map((item: CustomProviderModel) => {
-        const existing = models.value.find(model => model.id === item.id);
-        return { ...item, ...(existing?.reasoningEfforts === undefined ? {} : { reasoningEfforts: existing.reasoningEfforts }), key: crypto.randomUUID() };
-      });
-      return;
-    }
     fetchedModels.value = data.data;
     selectedIds.value = new Set();
     modelSearch.value = "";

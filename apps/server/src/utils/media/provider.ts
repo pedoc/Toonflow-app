@@ -5,7 +5,7 @@ import { lstat, mkdir, readFile, readdir, unlink } from "@toonflow/file";
 import { dirname, join } from "node:path";
 import { createContext, SourceTextModule } from "node:vm";
 import type { AudioConvertOptions, Provider, ProviderTools } from "@toonflow/providers";
-import tfRouter from "@toonflow/providers/media/tfRouter";
+import { getModelType } from "@/utils/ai/models";
 import { parse, parseExpression } from "@babel/parser";
 import { z } from "zod";
 import conf from "@/utils/conf";
@@ -201,7 +201,7 @@ function parseProvider(source: string) {
   if (icon !== undefined && typeof icon !== "string") invalid("供应商图标必须为字符串");
   if (version !== undefined && (typeof version !== "string" || !version.trim())) invalid("供应商版本必须为非空字符串");
   if (readme !== undefined && typeof readme !== "string") invalid("供应商说明必须为字符串");
-  if (modelsUrl !== undefined && !z.url({ protocol: /^https?$/ }).refine(value => {
+  if (modelsUrl !== undefined && modelsUrl !== "/models" && !z.url({ protocol: /^https?$/ }).refine(value => {
     const url = new URL(value);
     return !url.username && !url.password && !url.hash;
   }).safeParse(modelsUrl).success) invalid("模型列表地址须为不含凭据或片段的 HTTP URL");
@@ -210,14 +210,13 @@ function parseProvider(source: string) {
   const rules = z.array(z.record(z.string(), z.json())).safeParse(value("rules") ?? []);
   if (!rules.success) invalid("供应商 rules 必须为表单配置对象数组");
   return { object, modelProperty: entries.get("models"), id: id as string, label, icon, version: version?.trim(), readme, modelsUrl: modelsUrl as string | undefined, rules: rules.data, models: models.data,
-    supportsPrice: entries.has("getPrice") || id === tfRouter.id, supportsBalance: entries.has("getBalance") || id === tfRouter.id };
+    supportsPrice: entries.has("getPrice"), supportsBalance: entries.has("getBalance") };
 }
 
 function metadata(fileName: string, source: string) {
   const { id, label, icon, version, readme, modelsUrl, rules, models, supportsPrice, supportsBalance } = parseProvider(source);
   if (fileName !== `${id}.ts`) invalid("供应商 ID 与文件名不一致");
-  // ACT: 兼容旧 TF-Router 文件，缺少列表地址时使用内置定义。
-  return { fileName, id, label, icon, version, readme, modelsUrl: modelsUrl ?? (id === tfRouter.id ? tfRouter.modelsUrl : undefined), rules, models,
+  return { fileName, id, label, icon, version, readme, modelsUrl, rules, models,
     supportsPrice, supportsBalance, revision: createHash("sha256").update(source).digest("hex"), loadError: "" };
 }
 
@@ -327,10 +326,21 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
   if (!provider.modelsUrl) invalid("供应商未配置 modelsUrl");
   const apiKey = getMediaProviderApiKey(provider.id);
   if (expectedApiKey !== undefined && apiKey !== expectedApiKey) invalid("供应商配置已变更，请重试", 409);
-  const modelTypes = provider.id === tfRouter.id && !modelType ? ["video", "image", "audio"] : [modelType];
+  const configs = conf.get("settings", {}).mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
+  const config = configs?.[provider.id] ?? {};
+  const configSnapshot = JSON.stringify(config);
+  const modelTypes = [modelType];
   // ACT: 各类型只并行获取，汇总后保存一次，避免同一供应商文件发生版本冲突。
   const models = (await Promise.all(modelTypes.map(async requestedModelType => {
-    const modelsUrl = new URL(provider.modelsUrl!);
+    let modelsUrl: URL;
+    if (provider.modelsUrl === "/models") {
+      const apiUrl = String(config.apiUrl ?? provider.rules.find(rule => rule.field === "apiUrl")?.value ?? "").trim();
+      if (!URL.canParse(apiUrl)) invalid("请先配置供应商 API 地址");
+      const base = new URL(apiUrl);
+      if (!["http:", "https:"].includes(base.protocol) || base.username || base.password || base.search || base.hash) invalid("供应商 API 地址无效");
+      if (base.pathname === "/") base.pathname = "/v1";
+      modelsUrl = new URL(`${base.href.replace(/\/+$/, "")}/models`);
+    } else modelsUrl = new URL(provider.modelsUrl!);
     if (requestedModelType) modelsUrl.searchParams.set("type", requestedModelType);
     const response = await fetch(modelsUrl, {
       headers: { Accept: "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
@@ -348,20 +358,27 @@ export async function refreshMediaProviderModels(fileName: string, revision?: st
     })).max(2000) }).parse(await response.json());
     if (!result.data.length) throw new Error("未获取到媒体模型，保留原有列表");
     const requestedType = z.enum(["text", "image", "video", "audio"]).safeParse(modelsUrl.searchParams.get("type"));
-    return result.data.map(({ modelInfo, ...model }) => {
+    return result.data.flatMap(({ modelInfo, ...model }) => {
       const id = model.id.trim();
-      const previous = provider.models.find(item => item.id === id)
-        ?? (provider.id === tfRouter.id ? tfRouter.models.find(item => item.id === id) : undefined);
-      const type = model.type ?? (requestedType.success ? requestedType.data : previous?.type);
+      const previous = provider.models.find(item => item.id === id);
+      const type = model.type ?? (provider.id === "newApi" ? previous?.type ?? getModelType(model) : requestedType.success ? requestedType.data : previous?.type);
+      if (provider.id === "newApi" && type === "text") return [];
       if (!type) invalid(t`模型 ${id} 缺少 type，请在返回数据或 modelsUrl 的 type 参数中指定`);
       if (requestedType.success && type !== requestedType.data) invalid(t`模型 ${id} 的 type 与请求类型不一致`);
       // ACT: modelInfo 覆盖已有能力；缺省字段沿用同名配置，新模型不猜测生成能力。
-      const merged = { ...previous, ...model, ...modelInfo, id, label: model.label ?? previous?.label
+      const seedance = /seedance/i.test(id);
+      const defaults = provider.id === "newApi" && type === "video" ? {
+        mode: seedance ? ["text", "singleImage", "endFrameOptional", ...(/seedance-2/i.test(id) ? [["imageReference:9", "videoReference:3", "audioReference:3"]] : [])] : ["text", "singleImage"],
+        ...(seedance ? { audio: "optional", durationResolutionMap: [{ duration: Array.from({ length: /seedance-2-5/i.test(id) ? 27 : /seedance-2/i.test(id) ? 12 : 9 }, (_, index) => index + 4), resolution: ["480p", "720p", "1080p"] }] } : {}),
+      } : {};
+      const merged = { ...defaults, ...previous, ...model, ...modelInfo, id, label: model.label ?? previous?.label
         ?? (typeof model.display_name === "string" ? model.display_name : typeof model.displayName === "string" ? model.displayName : id), type };
       Reflect.deleteProperty(merged, "modelInfo");
-      return merged;
+      return [merged];
     });
   }))).flat();
+  if (JSON.stringify((conf.get("settings", {}).mediaProviderConfigs as typeof configs)?.[provider.id] ?? {}) !== configSnapshot) invalid("供应商配置已变更，请重试", 409);
+  if (provider.id === "newApi" && !modelType) return saveMediaProvider(fileName, models, provider.revision, apiKey);
   const types = new Set(models.map(model => model.type));
   return saveMediaProvider(fileName, [...provider.models.filter(model => !types.has(model.type)), ...models], provider.revision, apiKey);
 }
@@ -385,7 +402,7 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   const { id } = parseProvider(source);
   // ACT: VM 只隔离可信供应商的全局上下文；不可信代码需要独立进程等更强隔离。
   const context = createContext({
-    Buffer, URL, URLSearchParams, TextEncoder, TextDecoder, Blob,
+    Buffer, URL, URLSearchParams, TextEncoder, TextDecoder, Blob, FormData,
     AbortController, AbortSignal, setTimeout, clearTimeout,
   }, { codeGeneration: { strings: false, wasm: false } });
   const rejectImport = () => { throw new Error("供应商不能导入模块，请使用 this.tool 中的宿主工具"); };
@@ -398,11 +415,6 @@ export async function loadMediaProviderSource(source: string, config: Record<str
   await module.evaluate({ timeout: 1000 });
   signal?.throwIfAborted();
   const definition = (module.namespace as { default: Provider }).default;
-  // ACT: 已安装 TF-Router 仅补齐缺省查询能力，保留用户适配代码与模型列表。
-  if (id === tfRouter.id) {
-    definition.getPrice ??= tfRouter.getPrice;
-    definition.getBalance ??= tfRouter.getBalance;
-  }
   const rules = Array.isArray(definition.rules) ? definition.rules : [];
   const providerConfig = { ...Object.fromEntries(rules.map(rule => [rule.field, rule.value])), ...structuredClone(config) };
   const provider = {

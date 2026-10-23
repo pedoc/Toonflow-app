@@ -1,7 +1,7 @@
 import conf from "conf";
 import { mkdirSync, readdirSync, realpathSync } from "@toonflow/file";
 import { resolve } from "node:path";
-import tfRouter from "@toonflow/providers/language/tfRouter";
+import newApi from "@toonflow/providers/language/newApi";
 import type { RemoteTeam } from "@/utils/teams";
 import type { A2aSettings } from "@/agent/a2a/settings";
 import type { desktopUpdateAttempt } from "@/types/desktop";
@@ -9,7 +9,7 @@ import type { MobileLinkConfig } from "@/utils/mobileLink";
 import { normalizeNodeMenu, serializeNodeMenu } from "@/lib/nodeMenu";
 import type { SavedMcpServer } from "@toonflow/mcp/client";
 
-const autoInstallProviders = [tfRouter];
+const autoInstallProviders = [newApi];
 const dataDirectory = process.env.TOONFLOW_DATA_DIR ?? resolve(import.meta.dirname, "../../../../../data");
 mkdirSync(dataDirectory, { recursive: true });
 const configDirectory = realpathSync(dataDirectory);

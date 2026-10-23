@@ -1,3 +1,5 @@
+> 本 fork 使用 New API 作为默认模型网关，已移除 TF-router 的模型、账号及在线服务依赖。使用方法与接口范围见 [New API 配置说明](./newApi.md)。下方保留原项目介绍和致谢。
+
 <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=6,11,20&height=200&section=header&text=Toonflow&fontSize=90&fontColor=ffffff&animation=fadeIn&fontAlignY=50" alt="Toonflow" width="100%" />
 
 <p>

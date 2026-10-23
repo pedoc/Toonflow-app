@@ -1,8 +1,7 @@
 import axios from "axios";
 import { computed, onScopeDispose, ref, watch } from "vue";
 import type { ProviderBalance } from "@toonflow/providers";
-import { getTfApiKey } from "@/lib/tf";
-import { saveSettings, settings } from "@/stores/settings";
+import { settings } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 type BalanceSnapshot = { accountId: string; balance: ProviderBalance | null; revision: number };
@@ -10,8 +9,8 @@ type BalanceSnapshot = { accountId: string; balance: ProviderBalance | null; rev
 export async function getProviderBalance(providerId: string, options: { apiKey?: string; signal?: AbortSignal } = {}) {
   const entry = providerBalances.value.find(item => item.id === providerId);
   const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown }> | undefined;
-  const currentApiKey = providerId === "tfRouter" ? tfBalanceApiKey.value : configs?.[providerId]?.apiKey;
-  const matchesAccount = options.apiKey === undefined || (providerId === "tfRouter" ? normalizeApiKey(options.apiKey) : options.apiKey) === currentApiKey;
+  const currentApiKey = configs?.[providerId]?.apiKey;
+  const matchesAccount = options.apiKey === undefined || options.apiKey === currentApiKey;
   const { data } = await axios.post<{ code: number; data: BalanceSnapshot; message?: string }>("/api/ai/media/balance", {
     providerId, ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
   }, { signal: options.signal, timeout: 25000, headers: { "x-toonflow-workspace": "1" } });
@@ -24,16 +23,6 @@ export async function getProviderBalance(providerId: string, options: { apiKey?:
   return data.data;
 }
 
-function normalizeApiKey(key: unknown) {
-  return typeof key === "string" ? key.trim().replace(/^Bearer(?:\s+|$)/i, "").trim() : "";
-}
-
-export const tfBalanceApiKey = computed(() => {
-  const configs = settings.value.mediaProviderConfigs as Record<string, { apiKey?: unknown }> | undefined;
-  const key = configs?.tfRouter?.apiKey;
-  // 菜单跟随媒体生成账户；尚未配置媒体 Key 时仍可使用现有官方账户入口。
-  return normalizeApiKey(key) || getTfApiKey();
-});
 type BalanceProvider = { id: string; label: string; supportsBalance?: boolean };
 type BalanceEntry = BalanceSnapshot & { id: string; label: string; configKey: string; loading: boolean; error: string; configured: boolean };
 export const providerBalances = ref<BalanceEntry[]>([]);
@@ -59,7 +48,7 @@ export function refreshProviderBalance(providerId: string, signal?: AbortSignal)
   request.pending = (async () => {
     try {
       await getProviderBalance(providerId, {
-        ...(providerId === "tfRouter" ? { apiKey: tfBalanceApiKey.value } : {}), signal: request.signal,
+        signal: request.signal,
       });
     } catch (error) {
       if (!request.signal.aborted && providerBalances.value.includes(entry)) {
@@ -78,12 +67,6 @@ export function refreshProviderBalance(providerId: string, signal?: AbortSignal)
   return request.pending;
 }
 
-export function saveTfMediaApiKey(apiKey: string) {
-  return saveSettings(current => {
-    const configs = current.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
-    return { mediaProviderConfigs: { ...configs, tfRouter: { ...configs?.tfRouter, apiKey } } };
-  }).then(() => {});
-}
 
 export function useProviderBalances() {
   const workspaceStore = useWorkspaceStore();
@@ -99,13 +82,12 @@ export function useProviderBalances() {
   function syncProviders() {
     const configs = settings.value.mediaProviderConfigs as Record<string, Record<string, unknown>> | undefined;
     const previousEntries = new Map(providerBalances.value.map(entry => [entry.id, entry]));
-    const choices = [{ id: "tfRouter", label: "TF-Router", supportsBalance: true },
-      ...providers.filter(item => item.id !== "tfRouter" && item.supportsBalance)];
+    const choices = providers.filter(item => item.supportsBalance);
     providerBalances.value = choices.map(provider => {
-      const config = { ...configs?.[provider.id], ...(provider.id === "tfRouter" ? { apiKey: tfBalanceApiKey.value } : {}) };
+      const config = { ...configs?.[provider.id] };
       const configKey = JSON.stringify(config);
       const previous = previousEntries.get(provider.id);
-      const configured = provider.id !== "tfRouter" || !!tfBalanceApiKey.value;
+      const configured = !!config.apiKey;
       if (previous?.configKey === configKey) {
         Object.assign(previous, { label: provider.label, configured });
         return previous;
@@ -207,7 +189,7 @@ export function useProviderBalances() {
     scheduleRefresh();
   }
   watch(() => providerBalances.value.map(entry => entry.accountId).join(","), scheduleSubscribe);
-  watch(() => JSON.stringify([tfBalanceApiKey.value, settings.value.mediaProviderConfigs]), invalidate, { immediate: true, flush: "sync" });
+  watch(() => JSON.stringify(settings.value.mediaProviderConfigs), invalidate, { immediate: true, flush: "sync" });
   watch(() => workspaceStore.project?.lastOpenedAt, scheduleRefresh);
   const refreshProvider = (event: WindowEventMap["toonflow:plugin-installed"]) => {
     if (event.detail.type === "provider") invalidate();

@@ -38,7 +38,7 @@
           </span>
           <span class="sidebarText">设置</span>
         </button>
-        <a class="sidebarItem githubLink" href="https://github.com/HBAI-Ltd/Toonflow-app" target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub">
+        <a class="sidebarItem githubLink" href="https://github.com/pedoc/Toonflow-app" target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub">
           <icon-brand-github :size="18" aria-hidden="true" />
           <span class="sidebarText">GitHub</span>
         </a>
@@ -110,7 +110,6 @@
               </el-card>
             </div>
           </section>
-          <div data-home-section="explore"><explore :scrollElement="pageScroll?.wrapRef" /></div>
         </el-main>
       </div>
     </el-scrollbar>
@@ -130,7 +129,7 @@ import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox, type InputInstance, type ScrollbarInstance } from "element-plus";
 import { getReadableFileMimeType, readableFileAccept } from "@toonflow/server/documentFormats";
 import {
-  IconQrcode, IconDeviceDesktop, IconHome, IconCompass,
+  IconQrcode, IconDeviceDesktop, IconHome,
   IconArrowUp, IconPlus, IconLoader2,
   IconFolder, IconEdit,
   IconTrash, IconPaperclip,
@@ -148,7 +147,6 @@ import { waitForControlValue } from "@/lib/mcpControl";
 import settings from "@/components/settings/index.vue";
 import assetLibraryDialog from "./assetLibraryDialog.vue";
 import bg from "./bg.vue";
-import explore from "./explore.vue";
 import projectCover from "./projectCover.vue";
 import workspacePicker from "./workspacePicker.vue";
 
@@ -162,7 +160,6 @@ const activeSection = ref("home");
 const homeSections = [
   { id: "home", label: "首页", icon: IconHome },
   { id: "projects", label: "项目", icon: IconFolder },
-  { id: "explore", label: "探索", icon: IconCompass },
 ];
 const mobileConnect = defineAsyncComponent(() => import("@/components/mobileConnect.vue"));
 const router = useRouter();
@@ -272,7 +269,7 @@ function updateActiveSection() {
   if (!wrap) return;
   backgroundScrollTop.value = wrap.scrollTop;
   if (wrap.scrollTop > 0 && wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 2) {
-    activeSection.value = "explore";
+    activeSection.value = "projects";
     return;
   }
   const top = wrap.getBoundingClientRect().top + 120;

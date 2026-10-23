@@ -3,10 +3,24 @@ import { z } from "zod";
 
 const modelSchema = z.object({
   id: z.string().optional(), name: z.string().optional(),
+  type: z.string().optional(), supported_endpoint_types: z.array(z.string()).nullish(),
   display_name: z.string().optional(), displayName: z.string().optional(),
   inputTokenLimit: z.number().int().positive().optional(),
   outputTokenLimit: z.number().int().positive().optional(),
 });
+
+export function getModelType(model: { id?: string; type?: unknown; supported_endpoint_types?: unknown }): ModelType {
+  if (["text", "image", "video", "audio"].includes(String(model.type))) return model.type as ModelType;
+  const endpoints = Array.isArray(model.supported_endpoint_types) ? model.supported_endpoint_types.join(" ") : "";
+  if (/video/i.test(endpoints)) return "video";
+  if (/image/i.test(endpoints)) return "image";
+  if (/speech|tts/i.test(endpoints)) return "audio";
+  const id = model.id ?? "";
+  if (/seedance|sora|(?:^|[/-])wan(?:[\d.-]|$)|kling|veo|hailuo|vidu|hunyuan-video|cogvideo/i.test(id)) return "video";
+  if (/seedream|gpt-image|dall-e|flux|stable-diffusion|qwen-image|imagen|(?:^|[/-])image-/i.test(id)) return "image";
+  if (/tts|speech|cosyvoice/i.test(id)) return "audio";
+  return "text";
+}
 
 export async function fetchProviderModels({ apiUrl, protocol, apiKey }: { apiUrl: string; protocol: string; apiKey: string }) {
   const url = new URL(apiUrl);
@@ -31,6 +45,7 @@ export async function fetchProviderModels({ apiUrl, protocol, apiKey }: { apiUrl
     }).parse(await response.json());
     const items = result.data;
     for (const item of items) {
+      if (getModelType(item) !== "text") continue;
       const id = item.id?.trim();
       if (!id) throw new Error("模型列表包含无效的模型 ID");
       models.set(id, { id, label: item.display_name || item.displayName || id, contextWindow: item.inputTokenLimit, maxOutputTokens: item.outputTokenLimit });
